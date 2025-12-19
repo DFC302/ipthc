@@ -13,12 +13,12 @@ Fast CLI tool for querying the ip.thc.org API with **automatic pagination** supp
 ## Installation
 
 ```bash
-go install github.com/dfc302/ipthc@latest
+go install github.com/DFC302/ipthc@latest
 ```
 
 Or build from source:
 ```bash
-git clone https://github.com/dfc302/ipthc
+git clone https://github.com/DFC302/ipthc
 cd ipthc
 go build -o ipthc
 ```
