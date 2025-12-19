@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 )
 
@@ -66,32 +67,74 @@ func (c *APIClient) queryWithPagination(endpoint string) (string, error) {
 	parser := NewResponseParser(false) // Don't print comments during internal parsing
 	result := parser.Parse(body)
 
-	// If we have all results, return
+	// If user specified a limit, respect it and don't auto-paginate
+	if c.Limit > 0 {
+		return body, nil
+	}
+
+	// If there's no next page, we have everything
 	if !result.HasMore() {
 		return body, nil
 	}
 
-	// If user specified a limit, respect it and don't auto-paginate beyond it
-	if c.Limit > 0 && result.TotalCount > c.Limit {
-		// User wants limited results, respect their choice
-		return body, nil
-	}
-
-	// More results available - fetch with full limit
+	// Auto-pagination: follow next page links
 	if c.Verbose {
 		fmt.Fprintf(os.Stderr, "Auto-pagination: fetching all %d results...\n", result.TotalCount)
 	}
 
-	// Make second request with full count
-	baseEndpoint := endpoint
-	fullURL := fmt.Sprintf("%s%s?l=%d", c.BaseURL, baseEndpoint, result.TotalCount)
+	// Collect all data from all pages
+	allData := result.Data
+	nextURL := result.NextPageURL
+	pageCount := 1
 
-	fullBody, err := c.makeRequest(fullURL)
-	if err != nil {
-		return body, err // Return partial results if pagination fails
+	for nextURL != "" {
+		pageCount++
+		if c.Verbose {
+			fmt.Fprintf(os.Stderr, "Fetching page %d...\n", pageCount)
+		}
+
+		pageBody, err := c.makeRequest(nextURL)
+		if err != nil {
+			// Return what we have so far if pagination fails
+			if c.Verbose {
+				fmt.Fprintf(os.Stderr, "Pagination failed: %v\n", err)
+			}
+			break
+		}
+
+		pageResult := parser.Parse(pageBody)
+		allData = append(allData, pageResult.Data...)
+		nextURL = pageResult.NextPageURL
+
+		// Safety check: limit to 100 pages max to prevent infinite loops
+		if pageCount >= 100 {
+			if c.Verbose {
+				fmt.Fprintf(os.Stderr, "Reached maximum page limit (100)\n")
+			}
+			break
+		}
 	}
 
-	return fullBody, nil
+	// Reconstruct response with all data
+	// Keep the metadata from the first page but include all data
+	var combinedResponse strings.Builder
+	lines := strings.Split(body, "\n")
+
+	// Add comment lines from first page
+	for _, line := range lines {
+		if strings.HasPrefix(strings.TrimSpace(line), ";") {
+			combinedResponse.WriteString(line)
+			combinedResponse.WriteString("\n")
+		}
+	}
+
+	// Add all collected data
+	for _, data := range allData {
+		combinedResponse.WriteString(data)
+		combinedResponse.WriteString("\n")
+	}
+
+	return combinedResponse.String(), nil
 }
 
 // makeRequest performs the HTTP request with rate limiting
