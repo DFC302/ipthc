@@ -77,13 +77,19 @@ stdin reader → input validator → API client → response parser → stdout
    - Make HTTP GET requests with 30s timeout
    - Apply rate limiting (sleep between requests)
    - Handle HTTP errors gracefully
+   - **Smart Auto-Pagination**: Automatically fetch all results
+     - Make initial request without limit
+     - Parse total count from response
+     - If more results exist, re-request with full count
    - Return raw response body
 
 4. **Response Parser** (`parser.go`)
    - Split response by lines
    - Identify comment lines (start with `;`)
+   - **Extract pagination info** from `;;Entries: X/Y` line
    - In verbose mode: print comments to stderr
    - Output data lines to stdout
+   - Return both data and pagination metadata
 
 5. **Error Logger** (`logger.go`)
    - Log to `ipthc-errors.log` in current directory
@@ -123,11 +129,71 @@ lookup.segfault.net
 ### Parsing Logic
 - Lines starting with `;` = comments (metadata)
 - Other non-empty lines = data (results)
+- **Extract pagination metadata** from `;;Entries: X/Y`:
+  - X = current count received
+  - Y = total count available
+  - If X < Y, more results exist
 - **Normal mode**: Output only data lines to stdout
 - **Verbose mode**:
   - Output comment lines to stderr
   - Output data lines to stdout
   - Output errors to stderr
+
+## Smart Auto-Pagination
+
+**Problem:** API may return partial results (e.g., 200 out of 1000 subdomains)
+
+**Solution:** Automatically detect and fetch all results
+
+### How It Works
+
+1. **Initial Request**: Query API without limit or with user-specified `-l` flag
+   ```
+   GET https://ip.thc.org/sb/example.com
+   ```
+
+2. **Parse Response**: Extract pagination info from `;;Entries: X/Y`
+   - If `X == Y`: Got everything, done
+   - If `X < Y`: More results available
+
+3. **Auto-Fetch Remaining**: Make new request with full limit
+   ```
+   GET https://ip.thc.org/sb/example.com?l=Y
+   ```
+
+4. **Rate Limiting**: Respect configured rate limit between requests
+
+### Example Flow
+
+```
+User: echo "example.com" | ipthc -subs
+
+Step 1: Request without limit
+  → GET https://ip.thc.org/sb/example.com
+
+Step 2: API responds
+  ;;Entries: 200/1000
+  [200 subdomains]
+
+Step 3: Parser detects 200 < 1000
+
+Step 4: Wait 1 second (rate limit)
+
+Step 5: Re-request with full limit
+  → GET https://ip.thc.org/sb/example.com?l=1000
+
+Step 6: API responds
+  ;;Entries: 1000/1000
+  [all 1000 subdomains]
+
+Step 7: Output all 1000 subdomains
+```
+
+### User Control
+
+- User can still set `-l` flag to limit results
+- If `-l 500` specified and API has 1000, only get 500
+- Auto-pagination respects user's limit preference
 
 ## Error Handling
 
