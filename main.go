@@ -72,7 +72,14 @@ func main() {
 	defer logger.Close()
 
 	client := NewAPIClient(defaultBaseURL, *limit, *rateLimit, *verbose)
-	parser := NewResponseParser(*verbose)
+
+	// Callback to stream results as they arrive
+	callback := func(results []string, currentPage int, totalResults int) error {
+		for _, data := range results {
+			fmt.Println(data)
+		}
+		return nil
+	}
 
 	// Process stdin
 	scanner := bufio.NewScanner(os.Stdin)
@@ -87,7 +94,6 @@ func main() {
 		}
 
 		// Validate and query based on mode
-		var body string
 		var err error
 
 		switch mode {
@@ -100,7 +106,7 @@ func main() {
 				}
 				continue
 			}
-			body, err = client.QueryDNS(input)
+			err = client.QueryDNS(input, callback)
 
 		case "subs":
 			if err = ValidateDomain(input); err != nil {
@@ -111,7 +117,7 @@ func main() {
 				}
 				continue
 			}
-			body, err = client.QuerySubdomains(input)
+			err = client.QuerySubdomains(input, callback)
 
 		case "cname":
 			if err = ValidateDomain(input); err != nil {
@@ -122,7 +128,7 @@ func main() {
 				}
 				continue
 			}
-			body, err = client.QueryCNAME(input)
+			err = client.QueryCNAME(input, callback)
 		}
 
 		if err != nil {
@@ -132,12 +138,6 @@ func main() {
 				fmt.Fprintf(os.Stderr, "Error querying %s: %v\n", input, err)
 			}
 			continue
-		}
-
-		// Parse and output results
-		result := parser.Parse(body)
-		for _, data := range result.Data {
-			fmt.Println(data)
 		}
 	}
 

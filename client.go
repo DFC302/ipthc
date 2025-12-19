@@ -5,7 +5,6 @@ import (
 	"io"
 	"net/http"
 	"os"
-	"strings"
 	"time"
 )
 
@@ -32,26 +31,29 @@ func NewAPIClient(baseURL string, limit int, rateLimit float64, verbose bool) *A
 	}
 }
 
+// PageCallback is called for each page of results
+type PageCallback func(results []string, currentPage int, totalResults int) error
+
 // QueryDNS performs a reverse DNS lookup for an IP address
-func (c *APIClient) QueryDNS(ip string) (string, error) {
+func (c *APIClient) QueryDNS(ip string, callback PageCallback) error {
 	endpoint := fmt.Sprintf("/%s", ip)
-	return c.queryWithPagination(endpoint)
+	return c.queryWithCallback(endpoint, callback)
 }
 
 // QuerySubdomains performs subdomain enumeration for a domain
-func (c *APIClient) QuerySubdomains(domain string) (string, error) {
+func (c *APIClient) QuerySubdomains(domain string, callback PageCallback) error {
 	endpoint := fmt.Sprintf("/sb/%s", domain)
-	return c.queryWithPagination(endpoint)
+	return c.queryWithCallback(endpoint, callback)
 }
 
 // QueryCNAME performs CNAME lookup for a domain
-func (c *APIClient) QueryCNAME(domain string) (string, error) {
+func (c *APIClient) QueryCNAME(domain string, callback PageCallback) error {
 	endpoint := fmt.Sprintf("/cn/%s", domain)
-	return c.queryWithPagination(endpoint)
+	return c.queryWithCallback(endpoint, callback)
 }
 
-// queryWithPagination handles automatic pagination
-func (c *APIClient) queryWithPagination(endpoint string) (string, error) {
+// queryWithCallback handles automatic pagination with streaming via callback
+func (c *APIClient) queryWithCallback(endpoint string, callback PageCallback) error {
 	// Make initial request
 	url := fmt.Sprintf("%s%s", c.BaseURL, endpoint)
 	if c.Limit > 0 {
@@ -60,21 +62,26 @@ func (c *APIClient) queryWithPagination(endpoint string) (string, error) {
 
 	body, err := c.makeRequest(url)
 	if err != nil {
-		return "", err
+		return err
 	}
 
-	// Parse response to check for pagination
-	parser := NewResponseParser(false) // Don't print comments during internal parsing
+	// Parse first page
+	parser := NewResponseParser(c.Verbose)
 	result := parser.Parse(body)
+
+	// Call callback with first page
+	if err := callback(result.Data, 1, result.TotalCount); err != nil {
+		return err
+	}
 
 	// If user specified a limit, respect it and don't auto-paginate
 	if c.Limit > 0 {
-		return body, nil
+		return nil
 	}
 
-	// If there's no next page, we have everything
+	// If there's no next page, we're done
 	if !result.HasMore() {
-		return body, nil
+		return nil
 	}
 
 	// Auto-pagination: follow next page links
@@ -82,8 +89,6 @@ func (c *APIClient) queryWithPagination(endpoint string) (string, error) {
 		fmt.Fprintf(os.Stderr, "Auto-pagination: fetching all %d results...\n", result.TotalCount)
 	}
 
-	// Collect all data from all pages
-	allData := result.Data
 	nextURL := result.NextPageURL
 	pageCount := 1
 
@@ -95,15 +100,20 @@ func (c *APIClient) queryWithPagination(endpoint string) (string, error) {
 
 		pageBody, err := c.makeRequest(nextURL)
 		if err != nil {
-			// Return what we have so far if pagination fails
+			// Return error if pagination fails
 			if c.Verbose {
 				fmt.Fprintf(os.Stderr, "Pagination failed: %v\n", err)
 			}
-			break
+			return err
 		}
 
 		pageResult := parser.Parse(pageBody)
-		allData = append(allData, pageResult.Data...)
+
+		// Call callback with this page's data
+		if err := callback(pageResult.Data, pageCount, result.TotalCount); err != nil {
+			return err
+		}
+
 		nextURL = pageResult.NextPageURL
 
 		// Safety check: limit to 100 pages max to prevent infinite loops
@@ -115,26 +125,7 @@ func (c *APIClient) queryWithPagination(endpoint string) (string, error) {
 		}
 	}
 
-	// Reconstruct response with all data
-	// Keep the metadata from the first page but include all data
-	var combinedResponse strings.Builder
-	lines := strings.Split(body, "\n")
-
-	// Add comment lines from first page
-	for _, line := range lines {
-		if strings.HasPrefix(strings.TrimSpace(line), ";") {
-			combinedResponse.WriteString(line)
-			combinedResponse.WriteString("\n")
-		}
-	}
-
-	// Add all collected data
-	for _, data := range allData {
-		combinedResponse.WriteString(data)
-		combinedResponse.WriteString("\n")
-	}
-
-	return combinedResponse.String(), nil
+	return nil
 }
 
 // makeRequest performs the HTTP request with rate limiting
