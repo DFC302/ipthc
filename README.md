@@ -1,11 +1,26 @@
 # ipthc
 
-Fast CLI tool for querying the ip.thc.org API.
+Fast CLI tool for querying the ip.thc.org API with **automatic pagination** support.
+
+## Features
+
+- **Smart Auto-Pagination**: Automatically fetches ALL results (no manual limit guessing!)
+- **Clean Output**: ANSI color codes stripped for easy piping
+- **Rate Limiting**: Respects API limits with configurable delays
+- **Error Logging**: Failed queries logged to file for review
+- **Streaming**: Process results as they arrive via stdin/stdout
 
 ## Installation
 
 ```bash
 go install github.com/USERNAME/ipthc@latest
+```
+
+Or build from source:
+```bash
+git clone https://github.com/USERNAME/ipthc
+cd ipthc
+go build -o ipthc
 ```
 
 ## Usage
@@ -30,24 +45,49 @@ cat domains.txt | ipthc -cname
 
 ## Flags
 
+### Mode Flags (required, mutually exclusive)
 - `-dns`: DNS reverse lookup (IP → domains)
 - `-subs`: Subdomain enumeration
 - `-cname`: CNAME lookup (domains pointing to target)
-- `-v`: Verbose mode (show API metadata and errors)
-- `-l <int>`: Results limit per request (default: 200)
-- `-r <float>`: Rate limit delay in seconds (default: 1.0)
+
+### Optional Flags
+- `-v`: Verbose mode (show API metadata, pagination progress, and errors)
+- `-l <int>`: Results limit (default: 0 = auto-fetch all results)
+- `-r <float>`: Rate limit delay in seconds between requests (default: 1.0)
 
 ## Examples
 
+### Auto-Pagination (Default)
 ```bash
-# Verbose output with custom limit
-cat domains.txt | ipthc -subs -v -l 100
+# Automatically fetches ALL subdomains (e.g., 1041 results across 11 pages)
+echo "abbvie.com" | ipthc -subs > subdomains.txt
 
-# Custom rate limiting
+# With verbose mode to see pagination progress
+echo "abbvie.com" | ipthc -subs -v
+```
+
+### Manual Limit
+```bash
+# Limit to first 100 results only
+cat domains.txt | ipthc -subs -l 100
+```
+
+### Custom Rate Limiting
+```bash
+# Slower requests (2 second delay)
 cat ips.txt | ipthc -dns -r 2.0
+```
 
-# Pipeline with other tools
+### Pipeline with Other Tools
+```bash
+# Get unique subdomains, sorted
 cat domains.txt | ipthc -subs | sort | uniq
+
+# Count total subdomains
+echo "example.com" | ipthc -subs | wc -l
+
+# Filter specific patterns
+echo "example.com" | ipthc -subs | grep "admin"
 ```
 
 ## Error Handling
